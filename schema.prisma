@@ -1,0 +1,112 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Project {
+  id              String   @id @default(cuid())
+  name            String
+  district        String
+  corridorGeoJSON String
+  healthScore     Int      @default(0)
+  createdAt       DateTime @default(now())
+  parcels         Parcel[]
+  scenarios       Scenario[]
+}
+
+model Parcel {
+  id                String   @id @default(cuid())
+  projectId         String
+  project           Project  @relation(fields: [projectId], references: [id])
+  parcelCode        String   @unique
+  village           String
+  landType          String
+  areaAcres         Float
+  geometryGeoJSON   String
+  acquisitionStatus String
+  ownershipConflict Boolean  @default(false)
+  litigationFlag    Boolean  @default(false)
+  people            PersonParcel[]
+  events            AcquisitionEvent[]
+  compensation      Compensation?
+  rrRecord          RRRecord?
+  riskScore         RiskScore?
+}
+
+model Person {
+  id      String @id @default(cuid())
+  name    String
+  parcels PersonParcel[]
+}
+
+model PersonParcel {
+  personId         String
+  parcelId         String
+  relationshipType String
+  person           Person @relation(fields: [personId], references: [id])
+  parcel           Parcel @relation(fields: [parcelId], references: [id])
+  @@id([personId, parcelId])
+}
+
+model AcquisitionEvent {
+  id        String   @id @default(cuid())
+  parcelId  String
+  parcel    Parcel   @relation(fields: [parcelId], references: [id])
+  eventType String
+  eventDate DateTime
+  remarks   String?
+}
+
+model Compensation {
+  id              String @id @default(cuid())
+  parcelId        String @unique
+  parcel          Parcel @relation(fields: [parcelId], references: [id])
+  amountEstimated Float
+  amountPaid      Float  @default(0)
+  status          String
+}
+
+model RRRecord {
+  id       String  @id @default(cuid())
+  parcelId String  @unique
+  parcel   Parcel  @relation(fields: [parcelId], references: [id])
+  status   String
+  remarks  String?
+}
+
+model RiskScore {
+  id          String @id @default(cuid())
+  parcelId    String @unique
+  parcel      Parcel @relation(fields: [parcelId], references: [id])
+  overallRisk Int
+  factorsJSON String
+  explanation String
+  confidence  Int
+}
+
+model Scenario {
+  id                    String  @id @default(cuid())
+  projectId             String
+  project               Project @relation(fields: [projectId], references: [id])
+  label                 String
+  corridorGeoJSON       String
+  affectedParcels       Int
+  affectedFamilies      Int
+  estimatedCompensation Float
+  rrRisk                Int
+  legalRisk             Int
+  envRisk               Int
+  predictedDelayMonths  Float
+}
+
+model User {
+  id           String  @id @default(cuid())
+  email        String  @unique
+  passwordHash String
+  role         String  // ADMIN | OFFICER | CITIZEN
+  linkedCaseId String?
+}
