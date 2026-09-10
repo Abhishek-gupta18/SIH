@@ -7,6 +7,7 @@ const createAuthRouter = require('./routes/auth');
 const createCitizenRouter = require('./routes/citizen');
 const createFieldRouter = require('./routes/field');
 const { calculateRisk } = require('./services/riskService');
+const createScenarioRouter = require('./routes/scenarios');
 
 const app = express();
 const prisma = new PrismaClient();
@@ -17,6 +18,7 @@ app.use(express.json());
 app.use('/auth', createAuthRouter(prisma));
 app.use('/citizen', createCitizenRouter(prisma));
 app.use('/field', createFieldRouter(prisma));
+app.use('/scenarios', createScenarioRouter());
 
 app.get('/parcels/:id/risk', async (req, res, next) => {
   try {
@@ -92,7 +94,7 @@ app.get('/projects/:id/risk-summary', async (req, res, next) => {
       attentionCount,
       lowRiskCount,
       averageRisk,
-      topRiskParcels: topRiskDetail.map(r => ({
+      topRiskParcels: topRiskParcels.map(r => ({
         overallRisk: r.overallRisk,
         level: r.level,
         explanation: r.explanation,
