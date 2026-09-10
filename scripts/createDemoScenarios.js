@@ -1,62 +1,53 @@
 const { PrismaClient } = require('@prisma/client');
-const path = require('path');
-const { calculateScenarioImpact } = require(path.join(__dirname, '..', 'src', 'services', 'scenarioService'));
+const { calculateScenarioImpact } = require('../src/services/scenarioService');
 
-const prismaClient = new PrismaClient();
+const prisma = new PrismaClient();
 
 async function main() {
   try {
-    await prismaClient.$connect();
+    await prisma.$connect();
 
-    // 1. Find a project with parcels that has corridorGeoJSON
-    const project = await prismaClient.project.findFirst({
+    const project = await prisma.project.findFirst({
       include: { parcels: { include: { compensation: true, rrRecord: true, people: true } } }
     });
 
     if (!project) {
       console.log('No projects found. Exiting.');
-      await prismaClient.$disconnect();
+      await prisma.$disconnect();
       return;
     }
 
     console.log('Project:', project.name, 'ID:', project.id);
-    console.log('Existing corridorGeoJSON type:', project.corridorGeoJSON?.type);
+    console.log('corridorGeoJSON raw:', project.corridorGeoJSON?.substring(0, 80));
 
-    const corridorA = project.corridorGeoJSON;
+    const corridorA = JSON.parse(project.corridorGeoJSON);
     if (!corridorA) {
-      console.log('Project has no corridorGeoJSON. Exiting.');
-      await prismaClient.$disconnect();
+      console.log('No corridorGeoJSON. Exiting.');
+      await prisma.$disconnect();
       return;
     }
 
-    // 2. Generate Option B by shifting coordinates slightly
-    //    We'll create a new LineString by offsetting each coordinate's lat by ~0.03 degrees
+    console.log('Corridor A type:', corridorA.type);
+    console.log('Corridor A coordinates count:', corridorA.coordinates?.length);
+
+    // Generate Option B by shifting coordinates slightly
     let corridorB;
     if (corridorA.type === 'LineString') {
-      const shiftedCoords = corridorA.coordinates.map(([lng, lat]) => [
-        lng, lat + 0.03 // shift north by ~3km approx
-      ]);
-      corridorB = {
-        type: 'LineString',
-        coordinates: shiftedCoords
-      };
+      const shiftedCoords = corridorA.coordinates.map(([lng, lat]) => [lng, lat + 0.03]);
+      corridorB = { type: 'LineString', coordinates: shiftedCoords };
     } else if (corridorA.type === 'Polygon') {
-      // Simple buffer-like shift for polygon
       const shiftedCoords = corridorA.coordinates.map(ring =>
         ring.map(([lng, lat]) => [lng, lat + 0.03])
       );
-      corridorB = {
-        type: 'Polygon',
-        coordinates: [shiftedCoords[0]] // outer ring only for demo
-      };
+      corridorB = { type: 'Polygon', coordinates: [shiftedCoords[0]] };
     } else {
       console.log('Unsupported corridor type:', corridorA.type);
-      await prismaClient.$disconnect();
+      await prisma.$disconnect();
       return;
     }
 
     console.log('\n=== Option A (original corridor) ===');
-    const impactA = await calculateScenarioImpact(project.id, corridorA, prismaClient);
+    const impactA = await calculateScenarioImpact(project.id, corridorA, prisma);
     console.log('Affected parcels:', impactA.affectedParcels);
     console.log('Affected families:', impactA.affectedFamilies);
     console.log('Estimated compensation:', impactA.estimatedCompensation);
@@ -67,7 +58,7 @@ async function main() {
     console.log('Overall risk:', impactA.overallRisk);
 
     console.log('\n=== Option B (shifted corridor) ===');
-    const impactB = await calculateScenarioImpact(project.id, corridorB, prismaClient);
+    const impactB = await calculateScenarioImpact(project.id, corridorB, prisma);
     console.log('Affected parcels:', impactB.affectedParcels);
     console.log('Affected families:', impactB.affectedFamilies);
     console.log('Estimated compensation:', impactB.estimatedCompensation);
@@ -77,105 +68,63 @@ async function main() {
     console.log('Predicted delay months:', impactB.predictedDelayMonths);
     console.log('Overall risk:', impactB.overallRisk);
 
-    // 3. Compare using simple logic
-    const compareResult = {
-      recommended: impactA.affectedFamilies < impactB.affectedFamilies ? 'A' : 'B',
-      reason: `Option ${impactA.affectedFamilies < impactB.affectedFamilies ? 'A' : 'B'} affects ${Math.min(impactA.affectedFamilies, impactB.affectedFamilies)} families vs the other's ${Math.max(impactA.affectedFamilies, impactB.affectedFamilies)}. Option ${
-        impactA.affectedFamilies < impactB.affectedFamilies ? 'A' : 'B'
-      } has ${impactA.predictedDelayMonths} predicted delay months vs ${
-        impactB.predictedDelayMonths
-      }. Legal risk ${impactA.legalRisk} vs ${impactB.legalRisk}. Overall risk ${impactA.overallRisk}/100 vs ${impactB.overallRisk}/100.`
-    };
+    // Comparison
+    const scoreA = (impactA.affectedFamilies * 0.4) + (impactA.legalRisk * 0.3) + (impactA.rrRisk * 0.15) + (impactA.predictedDelayMonths * 0.15);
+    const scoreB = (impactB.affectedFamilies * 0.4) + (impactB.legalRisk * 0.3) + (impactB.rrRisk * 0.15) + (impactB.predictedDelayMonths * 0.15);
+
+    let recommended;
+    let reason;
+    if (scoreA < scoreB) {
+      recommended = 'A';
+      const familiesDiff = impactB.affectedFamilies - impactA.affectedFamilies;
+      const delayDiff = impactB.predictedDelayMonths - impactA.predictedDelayMonths;
+      const legalDiff = impactB.legalRisk - impactA.legalRisk;
+      const rrDiff = impactB.rrRisk - impactA.rrRisk;
+      reason = `Option A affects ${impactA.affectedFamilies} families vs Option B's ${impactB.affectedFamilies} (diff: ${familiesDiff}). Option A has ${impactA.predictedDelayMonths} predicted delay months vs ${impactB.predictedDelayMonths} (diff: ${delayDiff}). Legal risk ${impactA.legalRisk} vs ${impactB.legalRisk} (diff: ${legalDiff}). R&R risk ${impactA.rrRisk} vs ${impactB.rrRisk} (diff: ${rrDiff}). Overall risk ${impactA.overallRisk}/100 vs ${impactB.overallRisk}/100.`;
+    } else {
+      recommended = 'B';
+      const familiesDiff = impactA.affectedFamilies - impactB.affectedFamilies;
+      const delayDiff = impactA.predictedDelayMonths - impactB.predictedDelayMonths;
+      const legalDiff = impactA.legalRisk - impactB.legalRisk;
+      const rrDiff = impactA.rrRisk - impactB.rrRisk;
+      reason = `Option B affects ${impactB.affectedFamilies} families vs Option A's ${impactA.affectedFamilies} (diff: ${familiesDiff}). Option B has ${impactB.predictedDelayMonths} predicted delay months vs ${impactA.predictedDelayMonths} (diff: ${delayDiff}). Legal risk ${impactB.legalRisk} vs ${impactA.legalRisk} (diff: ${legalDiff}). R&R risk ${impactB.rrRisk} vs ${impactA.rrRisk} (diff: ${rrDiff}). Overall risk ${impactB.overallRisk}/100 vs ${impactA.overallRisk}/100.`;
+    }
 
     console.log('\n=== Comparison ===');
-    console.log(JSON.stringify(compareResult, null, 2));
+    console.log('Recommended:', recommended);
+    console.log('Reason:', reason);
 
-    // 4. Now POST to create both scenarios via the API
-    const { PrismaClient: PC } = require('@prisma/client');
-    const prismaAPI = new PC();
-    const app = require('./src/server').app;
+    // Create scenarios via API
+    const app = require('../src/server').app;
 
     console.log('\n=== Creating Scenario A via API ===');
-    const createA = await prismaAPI.$executeRaw`UNUSED`; // just to check
-    // Use direct request via the app's close listen approach
-    // We'll manually create scenarios using the service
-    const { calculateScenarioImpact: csi } = require('./src/services/scenarioService');
-    const prisma2 = new PC();
-
-    // Create scenario A
-    const impactA2 = await csi(project.id, corridorA, prisma2);
-    const scenarioA = await prisma2.scenario.create({
-      data: {
-        projectId: project.id,
-        label: 'Option A Original',
-        corridorGeoJSON: corridorA,
-        affectedParcels: impactA2.affectedParcels,
-        affectedFamilies: impactA2.affectedFamilies,
-        estimatedCompensation: impactA2.estimatedCompensation,
-        rrRisk: impactA2.rrRisk,
-        legalRisk: impactA2.legalRisk,
-        envRisk: impactA2.envRisk,
-        predictedDelayMonths: impactA2.predictedDelayMonths,
-        overallRisk: impactA2.overallRisk
-      }
+    const createA = await fetch('http://localhost:3000/projects/${project.id}/scenarios', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label: 'Option A Original', corridorGeoJSON: JSON.stringify(corridorA) })
     });
-    await prisma2.$disconnect();
-    console.log('Created Scenario A:', scenarioA.id);
+    const createAData = await createA.json();
+    console.log('Created Scenario A:', createAData.id);
 
-    // Create scenario B
-    const prisma3 = new PC();
-    const impactB2 = await csi(project.id, corridorB, prisma3);
-    const scenarioB = await prisma3.scenario.create({
-      data: {
-        projectId: project.id,
-        label: 'Option B Shifted',
-        corridorGeoJSON: corridorB,
-        affectedParcels: impactB2.affectedParcels,
-        affectedFamilies: impactB2.affectedFamilies,
-        estimatedCompensation: impactB2.estimatedCompensation,
-        rrRisk: impactB2.rrRisk,
-        legalRisk: impactB2.legalRisk,
-        envRisk: impactB2.envRisk,
-        predictedDelayMonths: impactB2.predictedDelayMonths,
-        overallRisk: impactB2.overallRisk
-      }
+    console.log('\n=== Creating Scenario B via API ===');
+    const createB = await fetch('http://localhost:3000/projects/${project.id}/scenarios', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label: 'Option B Shifted', corridorGeoJSON: JSON.stringify(corridorB) })
     });
-    await prisma3.$disconnect();
-    console.log('Created Scenario B:', scenarioB.id);
+    const createBData = await createB.json();
+    console.log('Created Scenario B:', createBData.id);
 
-    // 5. Compare via the API route logic
-    // Manually call compareScenarios
-    const { compareScenarios } = require(path.join(__dirname, '..', 'src', 'services', 'scenarioService'));
-    const comparison = compareScenarios(
-      {
-        affectedParcels: impactA2.affectedParcels,
-        affectedFamilies: impactA2.affectedFamilies,
-        estimatedCompensation: impactA2.estimatedCompensation,
-        rrRisk: impactA2.rrRisk,
-        legalRisk: impactA2.legalRisk,
-        envRisk: impactA2.envRisk,
-        predictedDelayMonths: impactA2.predictedDelayMonths,
-        overallRisk: impactA2.overallRisk
-      },
-      {
-        affectedParcels: impactB2.affectedParcels,
-        affectedFamilies: impactB2.affectedFamilies,
-        estimatedCompensation: impactB2.estimatedCompensation,
-        rrRisk: impactB2.rrRisk,
-        legalRisk: impactB2.legalRisk,
-        envRisk: impactB2.envRisk,
-        predictedDelayMonths: impactB2.predictedDelayMonths,
-        overallRisk: impactB2.overallRisk
-      }
-    );
+    console.log('\n=== Comparing via API ===');
+    const compareRes = await fetch(`http://localhost:3000/projects/${project.id}/scenarios/compare?scenarioA=${createAData.id}&scenarioB=${createBData.id}`);
+    const compareData = await compareRes.json();
+    console.log('Comparison result:');
+    console.log(JSON.stringify(compareData, null, 2));
 
-    console.log('\n=== Comparison (via compareScenarios function) ===');
-    console.log(JSON.stringify(comparison, null, 2));
-
-    await prismaClient.$disconnect();
+    await prisma.$disconnect();
   } catch (error) {
     console.error('Error:', error);
-    await prismaClient.$disconnect();
+    await prisma.$disconnect();
   }
 }
 

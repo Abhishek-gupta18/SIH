@@ -36,7 +36,8 @@ router.post('/projects/:id/scenarios', async (req, res, next) => {
         legalRisk: impact.legalRisk,
         envRisk: impact.envRisk,
         predictedDelayMonths: impact.predictedDelayMonths,
-        overallRisk: impact.overallRisk
+        overallRisk: impact.overallRisk,
+        corridorLengthKm: impact.corridorLengthKm
       }
     });
 
@@ -79,8 +80,8 @@ router.get('/projects/:id/scenarios/compare', async (req, res, next) => {
     if (aCheck.error) return res.status(404).json({ error: aCheck.error });
     if (bCheck.error) return res.status(404).json({ error: bCheck.error });
 
-    const scenarioA = aCheck.scenario;
-    const scenarioB = bCheck.scenario;
+    const storedScenarioA = aCheck.scenario;
+    const storedScenarioB = bCheck.scenario;
 
     // Recalculate impacts from stored data to ensure consistency
     // We'll use the stored fields directly for comparison since they were
@@ -88,28 +89,30 @@ router.get('/projects/:id/scenarios/compare', async (req, res, next) => {
     const compareResult = {
       recommended: compareScenarios(
         {
-          affectedParcels: scenarioA.affectedParcels,
-          affectedFamilies: scenarioA.affectedFamilies,
-          estimatedCompensation: scenarioA.estimatedCompensation,
-          rrRisk: scenarioA.rrRisk,
-          legalRisk: scenarioA.legalRisk,
-          envRisk: scenarioA.envRisk,
-          predictedDelayMonths: scenarioA.predictedDelayMonths,
-          overallRisk: scenarioA.overallRisk
+          affectedParcels: storedScenarioA.affectedParcels,
+          affectedFamilies: storedScenarioA.affectedFamilies,
+          estimatedCompensation: storedScenarioA.estimatedCompensation,
+          rrRisk: storedScenarioA.rrRisk,
+          legalRisk: storedScenarioA.legalRisk,
+          envRisk: storedScenarioA.envRisk,
+          predictedDelayMonths: storedScenarioA.predictedDelayMonths,
+          overallRisk: storedScenarioA.overallRisk,
+          corridorLengthKm: storedScenarioA.corridorLengthKm
         },
         {
-          affectedParcels: scenarioB.affectedParcels,
-          affectedFamilies: scenarioB.affectedFamilies,
-          estimatedCompensation: scenarioB.estimatedCompensation,
-          rrRisk: scenarioB.rrRisk,
-          legalRisk: scenarioB.legalRisk,
-          envRisk: scenarioB.envRisk,
-          predictedDelayMonths: scenarioB.predictedDelayMonths,
-          overallRisk: scenarioB.overallRisk
+          affectedParcels: storedScenarioB.affectedParcels,
+          affectedFamilies: storedScenarioB.affectedFamilies,
+          estimatedCompensation: storedScenarioB.estimatedCompensation,
+          rrRisk: storedScenarioB.rrRisk,
+          legalRisk: storedScenarioB.legalRisk,
+          envRisk: storedScenarioB.envRisk,
+          predictedDelayMonths: storedScenarioB.predictedDelayMonths,
+          overallRisk: storedScenarioB.overallRisk,
+          corridorLengthKm: storedScenarioB.corridorLengthKm
         }
       ),
-      scenarioA: { ...scenarioA },
-      scenarioB: { ...scenarioB }
+      scenarioA: { ...storedScenarioA },
+      scenarioB: { ...storedScenarioB }
     };
 
     await prisma.$disconnect();

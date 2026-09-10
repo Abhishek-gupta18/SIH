@@ -18,7 +18,7 @@ app.use(express.json());
 app.use('/auth', createAuthRouter(prisma));
 app.use('/citizen', createCitizenRouter(prisma));
 app.use('/field', createFieldRouter(prisma));
-app.use('/scenarios', createScenarioRouter());
+app.use(createScenarioRouter());
 
 app.get('/parcels/:id/risk', async (req, res, next) => {
   try {

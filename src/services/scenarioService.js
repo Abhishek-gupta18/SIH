@@ -27,8 +27,12 @@ async function calculateScenarioImpact(projectId, corridorGeoJSON, prismaInstanc
   const prisma = prismaInstance || new (require('@prisma/client').PrismaClient)();
 
   let corridorPolygon;
+  // Compute corridor length BEFORE buffering (on the original LineString)
+  let corridorLengthKm = 0;
   if (corridorGeoJSON.type === 'LineString') {
-    corridorPolygon = turf.buffer(corridorGeoJSON, 75, { units: 'meters' });
+    corridorPolygon = turf.buffer(corridorGeoJSON, 2000, { units: 'meters' });
+    // turf.length returns meters; convert to km
+    corridorLengthKm = Math.round(turf.length(corridorGeoJSON, { units: 'kilometers' }));
   } else if (corridorGeoJSON.type === 'Polygon') {
     corridorPolygon = corridorGeoJSON;
   } else {
@@ -132,28 +136,44 @@ async function calculateScenarioImpact(projectId, corridorGeoJSON, prismaInstanc
     legalRisk,
     envRisk,
     predictedDelayMonths,
-    overallRisk: averageOverallRisk
+    overallRisk: averageOverallRisk,
+    corridorLengthKm
   };
 }
 
 function compareScenarios(scenarioAResult, scenarioBResult) {
-  const { affectedFamilies: famA, predictedDelayMonths: delayA, legalRisk: legalA, rrRisk: rrA, overallRisk: riskA } = scenarioAResult;
-  const { affectedFamilies: famB, predictedDelayMonths: delayB, legalRisk: legalB, rrRisk: rrB, overallRisk: riskB } = scenarioBResult;
+  const { affectedFamilies: famA, predictedDelayMonths: delayA, legalRisk: legalA, rrRisk: rrA, overallRisk: riskA, corridorLengthKm: lenA } = scenarioAResult;
+  const { affectedFamilies: famB, predictedDelayMonths: delayB, legalRisk: legalB, rrRisk: rrB, overallRisk: riskB, corridorLengthKm: lenB } = scenarioBResult;
 
   // Composite score: families (0.4) + legal risk (0.3) + rr risk (0.15) + predicted delay (0.15)
   // Lower score is better
   const scoreA = (famA * 0.4) + (legalA * 0.3) + (rrA * 0.15) + (delayA * 0.15);
   const scoreB = (famB * 0.4) + (legalB * 0.3) + (rrB * 0.15) + (delayB * 0.15);
 
+  // Length delta computations
+  const lengthDeltaKm = Math.abs(lenA - lenB);
+  const lengthDeltaPercent = lenA > 0 && lenB > 0 ? Math.round(Math.abs(lenA - lenB) / Math.min(lenA, lenB) * 100) : 0;
+
+  // Threshold logic: if length increases by more than 25% while the weighted
+  // risk score improves by less than 10%, flag as disproportionate.
+  // "Weighted risk score" here uses the composite score (same weights as above).
+  const scoreImprovement = Math.abs(scoreA - scoreB);
+  const disproportionateThreshold = 25;   // length % increase flag
+  const riskImprovementThreshold = 10;    // composite score % improvement flag
+  const isDisproportionate = lengthDeltaPercent > disproportionateThreshold &&
+                             scoreImprovement < riskImprovementThreshold;
+
+  // rrDiff, familiesDiff, delayDiff computed once, available in both branches
+  const rrDiff = rrA - rrB;
+  const familiesDiff = famB - famA;
+  const delayDiff = delayB - delayA;
+
   let recommended;
   let reasonParts = [];
 
   if (scoreA < scoreB) {
     recommended = 'A';
-    const familiesDiff = famB - famA;
-    const delayDiff = delayB - delayA;
-    const legalDiff = legalB - legalA;
-    const rrDiff = rrB - rrA;
+    // familiesDiff, delayDiff, rrDiff computed at function scope (lines 168-169)
 
     reasonParts.push(`Option A affects ${famA} families vs Option B's ${famB}`);
     if (familiesDiff !== 0) {
@@ -167,12 +187,16 @@ function compareScenarios(scenarioAResult, scenarioBResult) {
       reasonParts.push(`${rrDiff > 0 ? 'better' : 'worse'} R&R risk profile (${rrA} vs ${rrB})`);
     }
     reasonParts.push(`overall risk ${riskA}/100 vs ${riskB}/100`);
+
+    // Add length trade-off text if disproportionate flag is triggered
+    if (isDisproportionate) {
+      reasonParts.push(`Option A requires ${lengthDeltaPercent}% less corridor length than Option B, but Option B's composite risk score is only ${Math.round(scoreImprovement)} points better — a disproportionate trade-off.`);
+    } else if (lengthDeltaPercent > 0) {
+      reasonParts.push(`Option A requires ${lengthDeltaPercent}% less corridor length than Option B.`);
+    }
   } else {
     recommended = 'B';
-    const familiesDiff = famA - famB;
-    const delayDiff = delayA - delayB;
-    const legalDiff = legalA - legalB;
-    const rrDiff = rrA - rrB;
+    // familiesDiff, delayDiff, rrDiff computed at function scope (lines 168-169)
 
     reasonParts.push(`Option B affects ${famB} families vs Option A's ${famA}`);
     if (familiesDiff !== 0) {
@@ -186,11 +210,24 @@ function compareScenarios(scenarioAResult, scenarioBResult) {
       reasonParts.push(`${rrDiff > 0 ? 'better' : 'worse'} R&R risk profile (${rrA} vs ${rrB})`);
     }
     reasonParts.push(`overall risk ${riskB}/100 vs ${riskA}/100`);
+
+    // Add length trade-off text if disproportionate flag is triggered
+    if (isDisproportionate) {
+      reasonParts.push(`Option B requires ${lengthDeltaPercent}% less corridor length than Option A, but Option A's composite risk score is only ${Math.round(scoreImprovement)} points better — a disproportionate trade-off.`);
+    } else if (lengthDeltaPercent > 0) {
+      reasonParts.push(`Option B requires ${lengthDeltaPercent}% less corridor length than Option A.`);
+    }
   }
 
   const reason = reasonParts.join('. ') + '.';
 
-  return { recommended, reason };
+  return {
+    recommended,
+    reason,
+    lengthDeltaKm,
+    lengthDeltaPercent,
+    tradeoffFlag: isDisproportionate
+  };
 }
 
 module.exports = { calculateScenarioImpact, compareScenarios };

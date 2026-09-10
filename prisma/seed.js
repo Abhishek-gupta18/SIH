@@ -98,17 +98,19 @@ function parcelGeometry(index) {
   const rowOffset = (index % 5 - 2) * 0.0032;
   const longitude = 76.82 + progress * 0.28;
   const latitude = 18.48 + progress * 0.25 + rowOffset;
-  const width = 0.0022 + (index % 3) * 0.0003;
-  const height = 0.0021 + (index % 4) * 0.00025;
+  // Base parcel size ~100m in degrees (~0.001°); vary slightly by areaAcres
+  const baseSize = 0.001 + (index % 7) * 0.0002;
+  const width = baseSize;
+  const height = baseSize;
 
   return JSON.stringify({
     type: 'Polygon',
     coordinates: [[
-      [round(longitude - width), round(latitude - height)],
-      [round(longitude + width), round(latitude - height * 0.85)],
-      [round(longitude + width * 0.9), round(latitude + height)],
-      [round(longitude - width * 1.05), round(latitude + height * 0.9)],
-      [round(longitude - width), round(latitude - height)]
+      [longitude - width, latitude - height],
+      [longitude + width, latitude - height],
+      [longitude + width, latitude + height],
+      [longitude - width, latitude + height],
+      [longitude - width, latitude - height]  // close the ring
     ]]
   });
 }
